@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>สปายจับผิด | Online Multiplayer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Kanit:wght@500;600;700;800&family=Sarabun:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<!-- เพิ่ม Socket.io Client -->
+<script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+<style>
+  :root{
+    --bg:#0F1417; --panel:#1B2226; --panel-alt:#232C31; --panel-line:rgba(255,255,255,.07);
+    --paper:#EDE6D6; --paper-line:#DCD3B9; --gold:#C7A03C; --gold-ink:#1A1500;
+    --red:#A33B32; --green:#4F7C58; --blue:#3E6E96; --purple:#7C5FA0;
+    --ink:#E8E3D6; --ink-dim:#8FA0A6; --ink-paper:#2B2620; --radius:16px;
+    --shadow:0 12px 34px rgba(0,0,0,.5);
+    --font-display:'Kanit',sans-serif; --font-body:'Sarabun',sans-serif; --font-mono:'IBM Plex Mono',monospace;
+  }
+  *{box-sizing:border-box;} html,body{margin:0;padding:0;}
+  body{
+    min-height:100vh;
+    background: radial-gradient(circle at 15% -10%, #1c2933 0%, transparent 45%),
+                radial-gradient(circle at 100% 0%, #1a2228 0%, transparent 40%), var(--bg);
+    color:var(--ink); font-family:var(--font-body); -webkit-font-smoothing:antialiased;
+  }
+  button,input{font-family:inherit;}
+  .app-shell{max-width:520px;margin:0 auto;padding:22px 16px 48px;min-height:100vh;}
+  .topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;}
+  .brand{font-family:var(--font-display);font-weight:800;font-size:21px;letter-spacing:.3px;display:flex;align-items:center;gap:8px;}
+  .brand .tag{font-family:var(--font-mono);font-size:9.5px;background:var(--red);color:#fff;padding:3px 7px;border-radius:4px;letter-spacing:1.5px;font-weight:600;}
+  .card{background:var(--panel);border-radius:var(--radius);padding:22px 18px;box-shadow:var(--shadow);border:1px solid var(--panel-line);margin-bottom:14px;}
+  h1,h2,h3{font-family:var(--font-display);margin:0 0 6px;font-weight:700;}
+  h1{font-size:26px;} h2{font-size:19px;} h3{font-size:15px;color:var(--gold);}
+  p{line-height:1.65;color:var(--ink);margin:0 0 10px;} .dim{color:var(--ink-dim);font-size:13.5px;}
+  .eyebrow{font-family:var(--font-mono);font-size:11px;color:var(--gold);letter-spacing:2px;text-transform:uppercase;margin-bottom:6px;}
+  .center{text-align:center;} .divider{height:1px;background:var(--panel-line);margin:16px 0;}
+  
+  .btn{font-family:var(--font-display);font-weight:600;font-size:15px;padding:14px 18px;border-radius:11px;border:none;cursor:pointer;width:100%;transition:transform .12s;}
+  .btn:active{transform:scale(.97);}
+  .btn-primary{background:var(--gold);color:var(--gold-ink);}
+  .btn-secondary{background:var(--panel-alt);color:var(--ink);border:1px solid var(--panel-line);}
+  .btn-danger{background:var(--red);color:#fff;}
+  .btn-ghost{background:transparent;color:var(--ink-dim);border:1px dashed var(--panel-line);}
+  .btn:disabled{opacity:.35;cursor:not-allowed;}
+  .btn-row{display:flex;gap:10px;margin-top:10px;} .btn-row .btn{flex:1;}
+  .stack{display:flex;flex-direction:column;gap:10px;margin-top:10px;}
+  .input{width:100%;padding:13px 14px;border-radius:10px;border:1px solid var(--panel-line);background:var(--panel-alt);color:var(--ink);font-size:15px;margin-bottom:10px;}
+  
+  .player-list{display:flex;flex-direction:column;gap:8px;margin:14px 0;}
+  .player-chip{display:flex;align-items:center;justify-content:space-between;background:var(--panel-alt);padding:11px 14px;border-radius:10px;font-family:var(--font-mono);font-size:14px;border:1px solid var(--panel-line);}
+  
+  .stepper-row{display:flex;align-items:center;justify-content:space-between;padding:6px 0;}
+  .stepper{display:flex;align-items:center;gap:16px;}
+  .stepper button{width:36px;height:36px;border-radius:50%;border:1px solid var(--panel-line);background:var(--panel-alt);color:var(--gold);font-size:19px;cursor:pointer;}
+  .stepper .val{font-family:var(--font-mono);font-size:18px;min-width:56px;text-align:center;}
+  .switch-row{display:flex;align-items:center;justify-content:space-between;padding:10px 0;}
+  .switch{position:relative;width:46px;height:26px;background:var(--panel-alt);border-radius:20px;cursor:pointer;border:1px solid var(--panel-line);flex-shrink:0;}
+  .switch.on{background:var(--green);border-color:var(--green);}
+  .switch::after{content:'';position:absolute;top:2px;left:2px;width:20px;height:20px;background:#fff;border-radius:50%;transition:left .15s;}
+  .switch.on::after{left:22px;}
+  
+  .room-code-box{font-family:var(--font-mono);font-size:42px;font-weight:700;color:var(--gold);text-align:center;letter-spacing:6px;background:var(--panel-alt);padding:15px;border-radius:12px;border:2px dashed var(--gold);margin:10px 0;}
+  .timer-display{font-family:var(--font-mono);font-size:66px;text-align:center;font-weight:700;color:var(--gold);margin:6px 0;}
+  
+  .paper-card{background:var(--paper);color:var(--ink-paper);border-radius:12px;padding:30px 22px;box-shadow:var(--shadow);text-align:center;}
+  .paper-card .word-big{font-family:var(--font-display);font-size:32px;font-weight:800;margin:14px 0;}
+  
+  .vote-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:14px 0;}
+  .vote-card{background:var(--panel-alt);border:2px solid var(--panel-line);border-radius:12px;padding:18px 8px;text-align:center;cursor:pointer;font-family:var(--font-display);font-weight:600;font-size:15px;}
+  .vote-card.selected{border-color:var(--red);background:rgba(163,59,50,.18);color:#f0b8b3;}
+  
+  .role-badge{padding:3px 9px;border-radius:6px;font-size:11px;font-weight:700;}
+  .role-badge.spy{background:var(--red);color:#fff;} .role-badge.villager{background:var(--green);color:#fff;}
+  .role-badge.joker{background:var(--gold);color:var(--gold-ink);} .role-badge.fbi{background:var(--blue);color:#fff;}
+  .role-badge.seer{background:var(--purple);color:#fff;}
+</style>
+</head>
+<body>
+<div id="app" class="app-shell"></div>
+
+<script>
+// เชื่อมต่อกับเซิร์ฟเวอร์ Render ที่เพิ่งสร้าง
+const SERVER_URL = 'https://oilspy-game-server.onrender.com';
+const socket = io(SERVER_URL);
+
+// Data
+const CATEGORIES = {
+  "อาหาร": ["ส้มตำ","ต้มยำกุ้ง","ผัดไทย","ข้าวมันไก่","แกงเขียวหวาน","หมูกระทะ"],
+  "อาชีพ": ["ครู","หมอ","ตำรวจ","นักดับเพลิง","ทนายความ","พยาบาล"],
+  "สถานที่": ["โรงเรียน","โรงพยาบาล","สนามบิน","ตลาดนัด","ห้างสรรพสินค้า","วัด"]
+};
+
+// State
+let screen = 'home';
+let isHost = false;
+let roomData = null;
+let myName = '';
+let myRole = '';
+let myWord = '';
+let myCategory = '';
+let timerRemaining = 180;
+let timerInterval = null;
+let selectedVoteId = null;
+
+socket.on('connect', () => console.log('Connected to Server!'));
+
+socket.on('updatePlayers', (players) => {
+  if (roomData) roomData.players = players;
+  if (screen === 'lobby') render();
+});
+
+socket.on('settingsUpdated', (newSettings) => {
+  if (roomData && !isHost) {
+    roomData.settings = newSettings;
+    if (screen === 'lobby') render();
+  }
+});
+
+socket.on('gameStarted', (data) => {
+  myRole = data.role;
+  myWord = data.word;
+  myCategory = data.category;
+  screen = 'reveal';
+  render();
+});
+
+socket.on('hostGameStarted', (data) => {
+  roomData.state = 'discuss';
+  myCategory = data.category;
+  myWord = data.word;
+  screen = 'discuss';
+  render();
+});
+
+socket.on('phaseChanged', (phase) => {
+  if (roomData) roomData.state = phase;
+  screen = phase;
+  render();
+});
+
+socket.on('timerSync', (timeLeft) => {
+  timerRemaining = timeLeft;
+  const el = document.getElementById('timerText');
+  if (el) el.textContent = fmtTime(timerRemaining);
+});
+
+socket.on('playerActionReceived', ({ playerId, action, data }) => {
+  if(isHost) {
+    alert(`ผู้เล่นพยายามใช้สกิล ${action} (ระบบครูผู้คุมกำลังอัปเดต)`);
+    // ในอนาคตสามารถใส่ Logic ประมวลผลสกิลตรงนี้ได้
+  }
+});
+
+socket.on('gameUpdated', (data) => {
+  if(data.action === 'kick') alert(`ผู้เล่น ${data.targetName} ถูกคัดออก!`);
+});
+
+socket.on('roomClosed', (msg) => {
+  alert(msg);
+  location.reload();
+});
+
+
+/* === Actions === */
+function createRoom(isHostPlaying) {
+  myName = document.getElementById('hostNameInput').value.trim() || 'Host';
+  socket.emit('createRoom', { isHostPlaying, playerName: myName }, (res) => {
+    if (res.success) {
+      isHost = true;
+      roomData = res.roomData;
+      roomData.roomCode = res.roomCode;
+      screen = 'lobby';
+      render();
+    }
+  });
+}
+
+function joinRoom() {
+  myName = document.getElementById('playerNameInput').value.trim();
+  const code = document.getElementById('roomCodeInput').value.trim().toUpperCase();
+  if (!myName || !code) return alert('กรอกชื่อและรหัสห้องให้ครบ');
+  
+  socket.emit('joinRoom', { roomCode: code, playerName: myName }, (res) => {
+    if (res.success) {
+      isHost = false;
+      roomData = res.roomData;
+      roomData.roomCode = code;
+      screen = 'lobby';
+      render();
+    } else {
+      alert(res.message);
+    }
+  });
+}
+
+function updateSettings(key, val) {
+  if(!isHost) return;
+  if(key === 'spyCount') roomData.settings.spyCount += val;
+  else roomData.settings[key] = !roomData.settings[key];
+  socket.emit('updateLobbySettings', { roomCode: roomData.roomCode, settings: roomData.settings });
+  render();
+}
+
+function startGameHost() {
+  if(!isHost || roomData.players.length < 3) return alert('ต้องมีผู้เล่นอย่างน้อย 3 คน');
+  
+  // สุ่มคำลับ
+  const cats = Object.keys(CATEGORIES);
+  const cat = cats[Math.floor(Math.random() * cats.length)];
+  const word = CATEGORIES[cat][Math.floor(Math.random() * CATEGORIES[cat].length)];
+  
+  // แจกบทบาท (โค้ดแบบย่อ)
+  const roles = {};
+  const shuffledIds = roomData.players.map(p=>p.id).sort(()=>Math.random()-0.5);
+  let i = 0;
+  for(let s=0; s<roomData.settings.spyCount; s++) { roles[shuffledIds[i]] = 'spy'; i++; }
+  if(roomData.settings.includeJoker) { roles[shuffledIds[i]] = 'joker'; i++; }
+  if(roomData.settings.includeFBI) { roles[shuffledIds[i]] = 'fbi'; i++; }
+  for(; i<shuffledIds.length; i++) { roles[shuffledIds[i]] = 'villager'; }
+  
+  socket.emit('startGame', { roomCode: roomData.roomCode, roles, word, category: cat });
+}
+
+function startTimer() {
+  if(!isHost || timerInterval) return;
+  timerInterval = setInterval(() => {
+    timerRemaining--;
+    document.getElementById('timerText').textContent = fmtTime(timerRemaining);
+    socket.emit('updateTimer', { roomCode: roomData.roomCode, timeLeft: timerRemaining });
+    if(timerRemaining <= 0) stopTimer();
+  }, 1000);
+}
+function stopTimer() { clearInterval(timerInterval); timerInterval = null; }
+
+function goToVote() {
+  stopTimer();
+  socket.emit('changePhase', { roomCode: roomData.roomCode, phase: 'vote' });
+}
+
+/* === Utils === */
+function fmtTime(sec) {
+  sec = Math.max(0, sec);
+  const m = Math.floor(sec/60), s = sec%60;
+  return String(m).padStart(2,'0')+':'+String(s).padStart(2,'0');
+}
+
+/* === Render UI === */
+function render() {
+  const app = document.getElementById('app');
+  let html = `<div class="topbar"><div class="brand">สปายจับผิด <span class="tag">Online</span></div></div>`;
+  
+  if (screen === 'home') {
+    html += `<div class="card center">
+      <h2>ผู้ควบคุมเกม (ครู)</h2>
+      <input id="hostNameInput" class="input" placeholder="ชื่อของคุณ...">
+      <div class="stack">
+        <button class="btn btn-primary" onclick="createRoom(false)">👑 สร้างห้อง (คุมอย่างเดียว)</button>
+        <button class="btn btn-secondary" onclick="createRoom(true)">🙋‍♂️ สร้างห้อง (และเล่นด้วย)</button>
+      </div>
+      <div class="divider"></div>
+      <h2>ผู้เล่น (นักเรียน)</h2>
+      <input id="playerNameInput" class="input" placeholder="ชื่อผู้เล่น...">
+      <input id="roomCodeInput" class="input" placeholder="รหัสห้อง 4 หลัก..." style="text-transform:uppercase;">
+      <button class="btn btn-primary" onclick="joinRoom()">เข้าสู่ห้อง</button>
+    </div>`;
+  }
+  
+  else if (screen === 'lobby') {
+    html += `<div class="card center">
+      <div class="eyebrow">รหัสห้องของคุณ</div>
+      <div class="room-code-box">${roomData.roomCode}</div>
+      <p class="dim">ให้เพื่อนๆ กรอกรหัสนี้เพื่อเข้าร่วมเกม</p>
+    </div>
+    
+    <div class="card">
+      <h3>ผู้เล่นในห้อง (${roomData.players.length})</h3>
+      <div class="player-list">
+        ${roomData.players.map(p => `<div class="player-chip"><span>${p.name} ${p.id===socket.id?'(คุณ)':''}</span></div>`).join('')}
+      </div>
+    </div>
+    
+    <div class="card">
+      <h3>ตั้งค่าเกม ${isHost ? '' : '(Host เป็นคนตั้งค่า)'}</h3>
+      <div class="stepper-row">
+        <div><b>จำนวนสปาย</b></div>
+        <div class="stepper">
+          ${isHost ? `<button onclick="updateSettings('spyCount', -1)">-</button>` : ''}
+          <div class="val">${roomData.settings.spyCount}</div>
+          ${isHost ? `<button onclick="updateSettings('spyCount', 1)">+</button>` : ''}
+        </div>
+      </div>
+      <div class="switch-row">
+        <div><b>เปิดใช้โจ๊กเกอร์ / FBI</b></div>
+        <div class="switch ${roomData.settings.includeJoker ? 'on' : ''}" onclick="updateSettings('includeJoker')"></div>
+      </div>
+    </div>
+    
+    ${isHost ? `<button class="btn btn-primary" onclick="startGameHost()">เริ่มเกม</button>` : `<div class="card center"><p class="dim">รอหัวหน้าห้องกดเริ่มเกม...</p></div>`}
+    `;
+  }
+  
+  else if (screen === 'reveal') {
+    const roleNames = {villager:'ชาวบ้าน', spy:'สปาย', joker:'โจ๊กเกอร์', fbi:'FBI'};
+    html += `<div class="paper-card">
+      <div class="eyebrow">หมวดหมู่: ${myCategory}</div>
+      <h3>บทบาทของคุณคือ: <span class="role-badge ${myRole}">${roleNames[myRole] || myRole}</span></h3>
+      <div class="word-big">${myWord}</div>
+      <p class="dim">${myRole === 'spy' ? 'พยายามเดาคำลับจากเพื่อน และเนียนไปกับพวกเขา!' : 'คุยกับเพื่อนให้รู้เรื่อง แต่อย่าให้สปายจับคำลับได้'}</p>
+    </div>
+    <button class="btn btn-primary stack" onclick="screen='discuss'; render();">✅ ดูเสร็จแล้ว เข้าสู่ช่วงสนทนา</button>`;
+  }
+  
+  else if (screen === 'discuss') {
+    html += `<div class="card center">
+      <div class="eyebrow">ช่วงสนทนา</div>
+      <div class="timer-display" id="timerText">${fmtTime(timerRemaining)}</div>
+      ${isHost ? `
+        <div class="btn-row">
+          <button class="btn btn-secondary" onclick="startTimer()">▶️ เล่น</button>
+          <button class="btn btn-secondary" onclick="stopTimer()">⏸ หยุด</button>
+        </div>
+        <div class="divider"></div>
+        <button class="btn btn-danger" onclick="goToVote()">🗳 ไปหน้าโหวต</button>
+      ` : `
+        <p class="dim">พูดคุยกันเพื่อหาตัวสปาย!</p>
+        ${['fbi','seer'].includes(myRole) ? `<button class="btn btn-secondary stack" onclick="alert('ระบบสกิลเตรียมอัปเดตในแพตช์หน้า!')">🎯 ใช้สกิลพิเศษของคุณ</button>` : ''}
+      `}
+    </div>`;
+  }
+  
+  else if (screen === 'vote') {
+    html += `<div class="card center">
+      <h2>🗳 โหวตคัดออก</h2>
+      ${isHost ? `
+        <p class="dim">ให้นักเรียนโหวตกันในห้องเรียน แล้วครูคลิกเลือกคนที่ถูกคัดออก</p>
+        <div class="vote-grid">
+          ${roomData.players.map(p => `<div class="vote-card" onclick="selectedVoteId='${p.id}'; render();" style="${selectedVoteId===p.id?'border-color:red;':''}">${p.name}</div>`).join('')}
+        </div>
+        <button class="btn btn-danger stack" onclick="alert('ผู้เล่นถูกคัดออก!')">ยืนยันคัดออก</button>
+      ` : `
+        <p class="dim">รอครูสรุปผลการโหวตจากหน้ารวม...</p>
+      `}
+    </div>`;
+  }
+
+  app.innerHTML = html;
+}
+
+render();
+</script>
+</body>
+</html>
