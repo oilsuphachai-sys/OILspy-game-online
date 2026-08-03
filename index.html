@@ -81,7 +81,7 @@
 <div id="app" class="app-shell"></div>
 
 <script>
-// เชื่อมต่อกับเซิร์ฟเวอร์ Render ที่เพิ่งสร้าง
+// เชื่อมต่อกับเซิร์ฟเวอร์ Render (แก้เป็นลิงก์ของคุณได้เลยถ้าเปลี่ยนชื่อ)
 const SERVER_URL = 'https://oilspy-game-server.onrender.com';
 const socket = io(SERVER_URL);
 
@@ -91,6 +91,7 @@ const CATEGORIES = {
   "อาชีพ": ["ครู","หมอ","ตำรวจ","นักดับเพลิง","ทนายความ","พยาบาล"],
   "สถานที่": ["โรงเรียน","โรงพยาบาล","สนามบิน","ตลาดนัด","ห้างสรรพสินค้า","วัด"]
 };
+const ROLE_NAMES = {villager:'ชาวบ้าน', spy:'สปาย', joker:'โจ๊กเกอร์', fbi:'FBI', seer:'ผู้หยั่งรู้'};
 
 // State
 let screen = 'home';
@@ -122,15 +123,25 @@ socket.on('gameStarted', (data) => {
   myRole = data.role;
   myWord = data.word;
   myCategory = data.category;
-  screen = 'reveal';
-  render();
+  
+  // ถ้าไม่ใช่ Host ให้เด้งไปหน้าเปิดโรลเลย (ส่วน Host รอคำสั่งถัดไป)
+  if (!isHost) {
+    screen = 'reveal';
+    render();
+  }
 });
 
 socket.on('hostGameStarted', (data) => {
   roomData.state = 'discuss';
   myCategory = data.category;
   myWord = data.word;
-  screen = 'discuss';
+  
+  // ถ้า Host เล่นด้วย ให้ไปหน้าเปิดโรลก่อน ถ้าไม่ได้เล่นให้ข้ามไปหน้าพูดคุย(แผงควบคุม)เลย
+  if (roomData.isHostPlaying) {
+    screen = 'reveal';
+  } else {
+    screen = 'discuss';
+  }
   render();
 });
 
@@ -148,8 +159,7 @@ socket.on('timerSync', (timeLeft) => {
 
 socket.on('playerActionReceived', ({ playerId, action, data }) => {
   if(isHost) {
-    alert(`ผู้เล่นพยายามใช้สกิล ${action} (ระบบครูผู้คุมกำลังอัปเดต)`);
-    // ในอนาคตสามารถใส่ Logic ประมวลผลสกิลตรงนี้ได้
+    alert(`มีการส่งคำสั่งสกิล: ${action}`);
   }
 });
 
@@ -165,7 +175,7 @@ socket.on('roomClosed', (msg) => {
 
 /* === Actions === */
 function createRoom(isHostPlaying) {
-  myName = document.getElementById('hostNameInput').value.trim() || 'Host';
+  myName = document.getElementById('hostNameInput').value.trim() || (isHostPlaying ? 'ครู' : 'Host');
   socket.emit('createRoom', { isHostPlaying, playerName: myName }, (res) => {
     if (res.success) {
       isHost = true;
@@ -197,27 +207,36 @@ function joinRoom() {
 
 function updateSettings(key, val) {
   if(!isHost) return;
-  if(key === 'spyCount') roomData.settings.spyCount += val;
-  else roomData.settings[key] = !roomData.settings[key];
+  if(key === 'spyCount') {
+    roomData.settings.spyCount = Math.max(1, roomData.settings.spyCount + val);
+  } else {
+    roomData.settings[key] = !roomData.settings[key];
+  }
   socket.emit('updateLobbySettings', { roomCode: roomData.roomCode, settings: roomData.settings });
   render();
 }
 
 function startGameHost() {
-  if(!isHost || roomData.players.length < 3) return alert('ต้องมีผู้เล่นอย่างน้อย 3 คน');
+  const s = roomData.settings;
+  const specialCount = (s.includeJoker ? 1 : 0) + (s.includeFBI ? 1 : 0) + (s.includeSeer ? 1 : 0);
+  
+  if(!isHost || roomData.players.length < (s.spyCount + specialCount + 1)) {
+    return alert(`ผู้เล่นไม่พอ! (ต้องการอย่างน้อย ${s.spyCount + specialCount + 1} คน สำหรับบทบาทที่เปิดไว้)`);
+  }
   
   // สุ่มคำลับ
   const cats = Object.keys(CATEGORIES);
   const cat = cats[Math.floor(Math.random() * cats.length)];
   const word = CATEGORIES[cat][Math.floor(Math.random() * CATEGORIES[cat].length)];
   
-  // แจกบทบาท (โค้ดแบบย่อ)
+  // แจกบทบาท
   const roles = {};
   const shuffledIds = roomData.players.map(p=>p.id).sort(()=>Math.random()-0.5);
   let i = 0;
-  for(let s=0; s<roomData.settings.spyCount; s++) { roles[shuffledIds[i]] = 'spy'; i++; }
-  if(roomData.settings.includeJoker) { roles[shuffledIds[i]] = 'joker'; i++; }
-  if(roomData.settings.includeFBI) { roles[shuffledIds[i]] = 'fbi'; i++; }
+  for(let spy=0; spy<s.spyCount; spy++) { roles[shuffledIds[i]] = 'spy'; i++; }
+  if(s.includeJoker) { roles[shuffledIds[i]] = 'joker'; i++; }
+  if(s.includeFBI) { roles[shuffledIds[i]] = 'fbi'; i++; }
+  if(s.includeSeer) { roles[shuffledIds[i]] = 'seer'; i++; }
   for(; i<shuffledIds.length; i++) { roles[shuffledIds[i]] = 'villager'; }
   
   socket.emit('startGame', { roomCode: roomData.roomCode, roles, word, category: cat });
@@ -292,8 +311,16 @@ function render() {
         </div>
       </div>
       <div class="switch-row">
-        <div><b>เปิดใช้โจ๊กเกอร์ / FBI</b></div>
-        <div class="switch ${roomData.settings.includeJoker ? 'on' : ''}" onclick="updateSettings('includeJoker')"></div>
+        <div><b>เปิดใช้โจ๊กเกอร์</b></div>
+        <div class="switch ${roomData.settings.includeJoker ? 'on' : ''}" ${isHost ? `onclick="updateSettings('includeJoker')"` : ''}></div>
+      </div>
+      <div class="switch-row">
+        <div><b>เปิดใช้ FBI</b></div>
+        <div class="switch ${roomData.settings.includeFBI ? 'on' : ''}" ${isHost ? `onclick="updateSettings('includeFBI')"` : ''}></div>
+      </div>
+      <div class="switch-row">
+        <div><b>เปิดใช้ผู้หยั่งรู้</b></div>
+        <div class="switch ${roomData.settings.includeSeer ? 'on' : ''}" ${isHost ? `onclick="updateSettings('includeSeer')"` : ''}></div>
       </div>
     </div>
     
@@ -302,11 +329,10 @@ function render() {
   }
   
   else if (screen === 'reveal') {
-    const roleNames = {villager:'ชาวบ้าน', spy:'สปาย', joker:'โจ๊กเกอร์', fbi:'FBI'};
     html += `<div class="paper-card">
       <div class="eyebrow">หมวดหมู่: ${myCategory}</div>
-      <h3>บทบาทของคุณคือ: <span class="role-badge ${myRole}">${roleNames[myRole] || myRole}</span></h3>
-      <div class="word-big">${myWord}</div>
+      <h3>บทบาทของคุณคือ: <span class="role-badge ${myRole}">${ROLE_NAMES[myRole] || myRole}</span></h3>
+      <div class="word-big">${myRole === 'spy' ? '?????' : myWord}</div>
       <p class="dim">${myRole === 'spy' ? 'พยายามเดาคำลับจากเพื่อน และเนียนไปกับพวกเขา!' : 'คุยกับเพื่อนให้รู้เรื่อง แต่อย่าให้สปายจับคำลับได้'}</p>
     </div>
     <button class="btn btn-primary stack" onclick="screen='discuss'; render();">✅ ดูเสร็จแล้ว เข้าสู่ช่วงสนทนา</button>`;
@@ -315,32 +341,46 @@ function render() {
   else if (screen === 'discuss') {
     html += `<div class="card center">
       <div class="eyebrow">ช่วงสนทนา</div>
-      <div class="timer-display" id="timerText">${fmtTime(timerRemaining)}</div>
-      ${isHost ? `
-        <div class="btn-row">
-          <button class="btn btn-secondary" onclick="startTimer()">▶️ เล่น</button>
-          <button class="btn btn-secondary" onclick="stopTimer()">⏸ หยุด</button>
-        </div>
+      <div class="timer-display" id="timerText">${fmtTime(timerRemaining)}</div>`;
+      
+      // ถ้าเป็นผู้เล่น หรือเป็น Hostที่เล่นด้วย ให้เห็นคำลับของตัวเองค้างไว้เตือนความจำ
+      if (!isHost || roomData.isHostPlaying) {
+        html += `<div class="divider"></div>
+                 <p class="dim" style="font-size:15px;">คุณคือ <b>${ROLE_NAMES[myRole]}</b> | คำลับ: <b style="color:var(--gold);">${myRole === 'spy' ? '?????' : myWord}</b></p>`;
+        
+        if (['fbi','seer'].includes(myRole)) {
+          html += `<button class="btn btn-secondary stack" onclick="alert('ปุ่มสกิลออนไลน์จะอัปเดตเต็มรูปแบบในรอบหน้าครับ!')">🎯 ใช้สกิลพิเศษของคุณ</button>`;
+        }
+      }
+
+      // ถ้าเป็น Host ให้แสดงแผงควบคุมเวลาด้วย
+      if (isHost) {
+        html += `
         <div class="divider"></div>
-        <button class="btn btn-danger" onclick="goToVote()">🗳 ไปหน้าโหวต</button>
-      ` : `
-        <p class="dim">พูดคุยกันเพื่อหาตัวสปาย!</p>
-        ${['fbi','seer'].includes(myRole) ? `<button class="btn btn-secondary stack" onclick="alert('ระบบสกิลเตรียมอัปเดตในแพตช์หน้า!')">🎯 ใช้สกิลพิเศษของคุณ</button>` : ''}
-      `}
-    </div>`;
+        <p class="eyebrow">แผงควบคุมของครู</p>
+        <div class="btn-row">
+          <button class="btn btn-secondary" onclick="startTimer()">▶️ เล่นเวลา</button>
+          <button class="btn btn-secondary" onclick="stopTimer()">⏸ หยุดเวลา</button>
+        </div>
+        <div class="stack">
+          <button class="btn btn-danger" onclick="goToVote()">🗳 หมดเวลา / ไปหน้าโหวต</button>
+        </div>`;
+      }
+      
+    html += `</div>`;
   }
   
   else if (screen === 'vote') {
     html += `<div class="card center">
       <h2>🗳 โหวตคัดออก</h2>
       ${isHost ? `
-        <p class="dim">ให้นักเรียนโหวตกันในห้องเรียน แล้วครูคลิกเลือกคนที่ถูกคัดออก</p>
+        <p class="dim">ให้นักเรียนโหวตกัน แล้วคุณครูคลิกเลือกคนที่ถูกคัดออก</p>
         <div class="vote-grid">
           ${roomData.players.map(p => `<div class="vote-card" onclick="selectedVoteId='${p.id}'; render();" style="${selectedVoteId===p.id?'border-color:red;':''}">${p.name}</div>`).join('')}
         </div>
-        <button class="btn btn-danger stack" onclick="alert('ผู้เล่นถูกคัดออก!')">ยืนยันคัดออก</button>
+        <button class="btn btn-danger stack" onclick="alert('ผู้เล่นถูกคัดออก! (รอระบบสรุปผลอัปเดตตามมาครับ)')">ยืนยันคัดออก</button>
       ` : `
-        <p class="dim">รอครูสรุปผลการโหวตจากหน้ารวม...</p>
+        <p class="dim">หมดเวลาสนทนา! รอคุณครูสรุปผลการโหวตหน้ารวม...</p>
       `}
     </div>`;
   }
