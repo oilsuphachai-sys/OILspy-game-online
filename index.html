@@ -7,7 +7,6 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Kanit:wght@500;600;700;800&family=Sarabun:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
-<!-- เพิ่ม Socket.io Client -->
 <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
 <style>
   :root{
@@ -68,8 +67,9 @@
   .paper-card .word-big{font-family:var(--font-display);font-size:32px;font-weight:800;margin:14px 0;}
   
   .vote-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:14px 0;}
-  .vote-card{background:var(--panel-alt);border:2px solid var(--panel-line);border-radius:12px;padding:18px 8px;text-align:center;cursor:pointer;font-family:var(--font-display);font-weight:600;font-size:15px;}
-  .vote-card.selected{border-color:var(--red);background:rgba(163,59,50,.18);color:#f0b8b3;}
+  .vote-card{background:var(--panel-alt);border:2px solid var(--panel-line);border-radius:12px;padding:18px 8px;text-align:center;cursor:pointer;font-family:var(--font-display);font-weight:600;font-size:15px;position:relative;}
+  .vote-card.selected{border-color:var(--gold);background:rgba(199,160,60,.15);color:var(--gold);}
+  .vote-badge{background:var(--red);color:white;padding:2px 7px;border-radius:8px;font-size:12px;position:absolute;top:-8px;right:-8px;box-shadow:0 2px 4px rgba(0,0,0,0.5);}
   
   .role-badge{padding:3px 9px;border-radius:6px;font-size:11px;font-weight:700;}
   .role-badge.spy{background:var(--red);color:#fff;} .role-badge.villager{background:var(--green);color:#fff;}
@@ -81,11 +81,9 @@
 <div id="app" class="app-shell"></div>
 
 <script>
-// เชื่อมต่อกับเซิร์ฟเวอร์ Render (แก้เป็นลิงก์ของคุณได้เลยถ้าเปลี่ยนชื่อ)
 const SERVER_URL = 'https://oilspy-game-server.onrender.com';
 const socket = io(SERVER_URL);
 
-// Data
 const CATEGORIES = {
   "อาหาร": ["ส้มตำ","ต้มยำกุ้ง","ผัดไทย","ข้าวมันไก่","แกงเขียวหวาน","หมูกระทะ"],
   "อาชีพ": ["ครู","หมอ","ตำรวจ","นักดับเพลิง","ทนายความ","พยาบาล"],
@@ -103,7 +101,11 @@ let myWord = '';
 let myCategory = '';
 let timerRemaining = 180;
 let timerInterval = null;
+
+// Vote State
 let selectedVoteId = null;
+let hasVoted = false;
+let voteTally = {}; // { voterId: targetId }
 
 socket.on('connect', () => console.log('Connected to Server!'));
 
@@ -123,31 +125,25 @@ socket.on('gameStarted', (data) => {
   myRole = data.role;
   myWord = data.word;
   myCategory = data.category;
-  
-  // ถ้าไม่ใช่ Host ให้เด้งไปหน้าเปิดโรลเลย (ส่วน Host รอคำสั่งถัดไป)
-  if (!isHost) {
-    screen = 'reveal';
-    render();
-  }
+  if (!isHost) { screen = 'reveal'; render(); }
 });
 
 socket.on('hostGameStarted', (data) => {
   roomData.state = 'discuss';
   myCategory = data.category;
   myWord = data.word;
-  
-  // ถ้า Host เล่นด้วย ให้ไปหน้าเปิดโรลก่อน ถ้าไม่ได้เล่นให้ข้ามไปหน้าพูดคุย(แผงควบคุม)เลย
-  if (roomData.isHostPlaying) {
-    screen = 'reveal';
-  } else {
-    screen = 'discuss';
-  }
+  if (roomData.isHostPlaying) { screen = 'reveal'; } else { screen = 'discuss'; }
   render();
 });
 
 socket.on('phaseChanged', (phase) => {
   if (roomData) roomData.state = phase;
   screen = phase;
+  if (phase === 'vote') {
+    selectedVoteId = null;
+    hasVoted = false;
+    voteTally = {};
+  }
   render();
 });
 
@@ -155,23 +151,29 @@ socket.on('timerSync', (timeLeft) => {
   timerRemaining = timeLeft;
   const el = document.getElementById('timerText');
   if (el) el.textContent = fmtTime(timerRemaining);
+  
+  // 🕒 ระบบบังคับโหวตของฝั่งนักเรียน เมื่อเวลาหมด
+  if (!isHost && screen === 'vote' && timeLeft <= 0 && !hasVoted) {
+    selectedVoteId = 'skip';
+    submitPlayerVote();
+  }
 });
 
 socket.on('playerActionReceived', ({ playerId, action, data }) => {
   if(isHost) {
-    alert(`มีการส่งคำสั่งสกิล: ${action}`);
+    if (action === 'vote') {
+      voteTally[playerId] = data;
+      if (screen === 'vote') render();
+    } else {
+      alert(`มีการส่งคำสั่งสกิล: ${action}`);
+    }
   }
-});
-
-socket.on('gameUpdated', (data) => {
-  if(data.action === 'kick') alert(`ผู้เล่น ${data.targetName} ถูกคัดออก!`);
 });
 
 socket.on('roomClosed', (msg) => {
   alert(msg);
   location.reload();
 });
-
 
 /* === Actions === */
 function createRoom(isHostPlaying) {
@@ -199,37 +201,29 @@ function joinRoom() {
       roomData.roomCode = code;
       screen = 'lobby';
       render();
-    } else {
-      alert(res.message);
-    }
+    } else { alert(res.message); }
   });
 }
 
 function updateSettings(key, val) {
   if(!isHost) return;
-  if(key === 'spyCount') {
-    roomData.settings.spyCount = Math.max(1, roomData.settings.spyCount + val);
-  } else {
-    roomData.settings[key] = !roomData.settings[key];
-  }
+  if(key === 'spyCount') roomData.settings.spyCount = Math.max(1, roomData.settings.spyCount + val);
+  else roomData.settings[key] = !roomData.settings[key];
   socket.emit('updateLobbySettings', { roomCode: roomData.roomCode, settings: roomData.settings });
   render();
 }
 
 function startGameHost() {
   const s = roomData.settings;
-  const specialCount = (s.includeJoker ? 1 : 0) + (s.includeFBI ? 1 : 0) + (s.includeSeer ? 1 : 0);
-  
+  const specialCount = (s.includeJoker?1:0) + (s.includeFBI?1:0) + (s.includeSeer?1:0);
   if(!isHost || roomData.players.length < (s.spyCount + specialCount + 1)) {
-    return alert(`ผู้เล่นไม่พอ! (ต้องการอย่างน้อย ${s.spyCount + specialCount + 1} คน สำหรับบทบาทที่เปิดไว้)`);
+    return alert(`ผู้เล่นไม่พอ! (ต้องการอย่างน้อย ${s.spyCount + specialCount + 1} คน)`);
   }
   
-  // สุ่มคำลับ
   const cats = Object.keys(CATEGORIES);
   const cat = cats[Math.floor(Math.random() * cats.length)];
   const word = CATEGORIES[cat][Math.floor(Math.random() * CATEGORIES[cat].length)];
   
-  // แจกบทบาท
   const roles = {};
   const shuffledIds = roomData.players.map(p=>p.id).sort(()=>Math.random()-0.5);
   let i = 0;
@@ -246,16 +240,55 @@ function startTimer() {
   if(!isHost || timerInterval) return;
   timerInterval = setInterval(() => {
     timerRemaining--;
-    document.getElementById('timerText').textContent = fmtTime(timerRemaining);
+    const el = document.getElementById('timerText');
+    if(el) el.textContent = fmtTime(timerRemaining);
     socket.emit('updateTimer', { roomCode: roomData.roomCode, timeLeft: timerRemaining });
-    if(timerRemaining <= 0) stopTimer();
+    
+    // 🕒 ระบบตรวจสอบเมื่อเวลาหมด (ฝั่งหน้าจอครู)
+    if(timerRemaining <= 0) {
+      stopTimer();
+      if(screen === 'vote') {
+        const totalVotes = Object.keys(voteTally).length;
+        const half = roomData.players.length / 2;
+        
+        if (totalVotes <= half) {
+          alert('⏳ หมดเวลา! มีนักเรียนกดโหวตไม่ถึงครึ่ง ระบบบังคับ "ไม่คัดใครออก" ทันที');
+          selectedVoteId = 'skip';
+          concludeVoteHost(); // บังคับฟันธง
+        } else {
+          alert('⏳ หมดเวลาโหวต! (มีผู้โหวตเกินครึ่งแล้ว คุณครูโปรดฟันธงผลสรุปได้เลยครับ)');
+        }
+      }
+    }
   }, 1000);
 }
+
 function stopTimer() { clearInterval(timerInterval); timerInterval = null; }
 
 function goToVote() {
   stopTimer();
+  timerRemaining = 30; // ⏳ ให้เวลาโหวต 30 วินาที (เปลี่ยนตัวเลขตรงนี้ได้ครับ)
   socket.emit('changePhase', { roomCode: roomData.roomCode, phase: 'vote' });
+  startTimer(); // เริ่มเดินเวลาถอยหลังทันทีที่เข้าหน้าโหวต
+}
+
+function submitPlayerVote() {
+  if(!selectedVoteId) return alert('กรุณาเลือกผู้เล่น หรือกด ไม่คัดใครออก');
+  socket.emit('playerAction', { roomCode: roomData.roomCode, action: 'vote', data: selectedVoteId });
+  hasVoted = true;
+  render();
+}
+
+function concludeVoteHost() {
+  if(!selectedVoteId) return alert('กรุณาเลือกผู้เล่นที่ต้องการคัดออก หรือกด ไม่คัดใครออก');
+  stopTimer(); // หยุดเวลาทันทีเผื่อครูกดฟันธงก่อนหมดเวลา
+  
+  if(selectedVoteId === 'skip') {
+    alert('ผลสรุป: ไม่คัดใครออก (ยังไม่มีใครถูกคัดออกในรอบนี้)');
+  } else {
+    const targetName = roomData.players.find(p => p.id === selectedVoteId)?.name;
+    alert(`สรุปผล: ${targetName} ถูกคัดออก! (ระบบคัดออกอัตโนมัติแบบออนไลน์จะมาในอัปเดตถัดไปครับ)`);
+  }
 }
 
 /* === Utils === */
@@ -292,14 +325,12 @@ function render() {
       <div class="room-code-box">${roomData.roomCode}</div>
       <p class="dim">ให้เพื่อนๆ กรอกรหัสนี้เพื่อเข้าร่วมเกม</p>
     </div>
-    
     <div class="card">
       <h3>ผู้เล่นในห้อง (${roomData.players.length})</h3>
       <div class="player-list">
         ${roomData.players.map(p => `<div class="player-chip"><span>${p.name} ${p.id===socket.id?'(คุณ)':''}</span></div>`).join('')}
       </div>
     </div>
-    
     <div class="card">
       <h3>ตั้งค่าเกม ${isHost ? '' : '(Host เป็นคนตั้งค่า)'}</h3>
       <div class="stepper-row">
@@ -310,20 +341,10 @@ function render() {
           ${isHost ? `<button onclick="updateSettings('spyCount', 1)">+</button>` : ''}
         </div>
       </div>
-      <div class="switch-row">
-        <div><b>เปิดใช้โจ๊กเกอร์</b></div>
-        <div class="switch ${roomData.settings.includeJoker ? 'on' : ''}" ${isHost ? `onclick="updateSettings('includeJoker')"` : ''}></div>
-      </div>
-      <div class="switch-row">
-        <div><b>เปิดใช้ FBI</b></div>
-        <div class="switch ${roomData.settings.includeFBI ? 'on' : ''}" ${isHost ? `onclick="updateSettings('includeFBI')"` : ''}></div>
-      </div>
-      <div class="switch-row">
-        <div><b>เปิดใช้ผู้หยั่งรู้</b></div>
-        <div class="switch ${roomData.settings.includeSeer ? 'on' : ''}" ${isHost ? `onclick="updateSettings('includeSeer')"` : ''}></div>
-      </div>
+      <div class="switch-row"><div><b>เปิดใช้โจ๊กเกอร์</b></div><div class="switch ${roomData.settings.includeJoker ? 'on' : ''}" ${isHost ? `onclick="updateSettings('includeJoker')"` : ''}></div></div>
+      <div class="switch-row"><div><b>เปิดใช้ FBI</b></div><div class="switch ${roomData.settings.includeFBI ? 'on' : ''}" ${isHost ? `onclick="updateSettings('includeFBI')"` : ''}></div></div>
+      <div class="switch-row"><div><b>เปิดใช้ผู้หยั่งรู้</b></div><div class="switch ${roomData.settings.includeSeer ? 'on' : ''}" ${isHost ? `onclick="updateSettings('includeSeer')"` : ''}></div></div>
     </div>
-    
     ${isHost ? `<button class="btn btn-primary" onclick="startGameHost()">เริ่มเกม</button>` : `<div class="card center"><p class="dim">รอหัวหน้าห้องกดเริ่มเกม...</p></div>`}
     `;
   }
@@ -342,47 +363,50 @@ function render() {
     html += `<div class="card center">
       <div class="eyebrow">ช่วงสนทนา</div>
       <div class="timer-display" id="timerText">${fmtTime(timerRemaining)}</div>`;
-      
-      // ถ้าเป็นผู้เล่น หรือเป็น Hostที่เล่นด้วย ให้เห็นคำลับของตัวเองค้างไว้เตือนความจำ
       if (!isHost || roomData.isHostPlaying) {
-        html += `<div class="divider"></div>
-                 <p class="dim" style="font-size:15px;">คุณคือ <b>${ROLE_NAMES[myRole]}</b> | คำลับ: <b style="color:var(--gold);">${myRole === 'spy' ? '?????' : myWord}</b></p>`;
-        
-        if (['fbi','seer'].includes(myRole)) {
-          html += `<button class="btn btn-secondary stack" onclick="alert('ปุ่มสกิลออนไลน์จะอัปเดตเต็มรูปแบบในรอบหน้าครับ!')">🎯 ใช้สกิลพิเศษของคุณ</button>`;
-        }
+        html += `<div class="divider"></div><p class="dim" style="font-size:15px;">คุณคือ <b>${ROLE_NAMES[myRole]}</b> | คำลับ: <b style="color:var(--gold);">${myRole === 'spy' ? '?????' : myWord}</b></p>`;
       }
-
-      // ถ้าเป็น Host ให้แสดงแผงควบคุมเวลาด้วย
       if (isHost) {
-        html += `
-        <div class="divider"></div>
-        <p class="eyebrow">แผงควบคุมของครู</p>
-        <div class="btn-row">
-          <button class="btn btn-secondary" onclick="startTimer()">▶️ เล่นเวลา</button>
-          <button class="btn btn-secondary" onclick="stopTimer()">⏸ หยุดเวลา</button>
-        </div>
-        <div class="stack">
-          <button class="btn btn-danger" onclick="goToVote()">🗳 หมดเวลา / ไปหน้าโหวต</button>
-        </div>`;
+        html += `<div class="divider"></div><p class="eyebrow">แผงควบคุมของครู</p>
+        <div class="btn-row"><button class="btn btn-secondary" onclick="startTimer()">▶️ เล่นเวลา</button><button class="btn btn-secondary" onclick="stopTimer()">⏸ หยุดเวลา</button></div>
+        <div class="stack"><button class="btn btn-danger" onclick="goToVote()">🗳 หมดเวลา / เปิดระบบโหวต</button></div>`;
       }
-      
     html += `</div>`;
   }
   
   else if (screen === 'vote') {
-    html += `<div class="card center">
-      <h2>🗳 โหวตคัดออก</h2>
-      ${isHost ? `
-        <p class="dim">ให้นักเรียนโหวตกัน แล้วคุณครูคลิกเลือกคนที่ถูกคัดออก</p>
+    html += `<div class="card center"><h2>🗳 โหวตคัดออก</h2>
+    <div class="timer-display" id="timerText" style="font-size: 42px; margin-top: -5px; margin-bottom: 10px;">${fmtTime(timerRemaining)}</div>`;
+    
+    // โหมดหน้าจอครู (Host)
+    if (isHost) {
+      const totalVotes = Object.keys(voteTally).length;
+      html += `<p class="dim">คะแนนโหวตสด (${totalVotes}/${roomData.players.length} คน)</p>
+      <div class="vote-grid">
+        ${roomData.players.map(p => {
+          const count = Object.values(voteTally).filter(v => v === p.id).length;
+          const badge = count > 0 ? `<span class="vote-badge">${count}</span>` : '';
+          return `<div class="vote-card ${selectedVoteId===p.id?'selected':''}" onclick="selectedVoteId='${p.id}'; render();">${p.name}${badge}</div>`;
+        }).join('')}
+      </div>
+      <div class="vote-card ${selectedVoteId==='skip'?'selected':''}" onclick="selectedVoteId='skip'; render();" style="margin-bottom:14px;">🙅‍♂️ ไม่คัดใครออก ${Object.values(voteTally).filter(v => v === 'skip').length > 0 ? `<span class="vote-badge" style="right:10px;">${Object.values(voteTally).filter(v => v === 'skip').length}</span>` : ''}</div>
+      <p class="dim" style="font-size:12px;">ครูสามารถคลิกเลือกตามเสียงส่วนมาก แล้วกดฟันธงด้านล่าง</p>
+      <button class="btn btn-danger stack" onclick="concludeVoteHost()">ฟันธงผลโหวต</button>`;
+    } 
+    // โหมดหน้าจอนักเรียน (Player)
+    else {
+      if (hasVoted) {
+        html += `<p class="dim" style="margin-top:20px;">✅ ส่งผลโหวตเรียบร้อย<br>รอครูสรุปผลรวม...</p>`;
+      } else {
+        html += `<p class="dim">เลือกผู้เล่นที่คิดว่าเป็นสปาย</p>
         <div class="vote-grid">
-          ${roomData.players.map(p => `<div class="vote-card" onclick="selectedVoteId='${p.id}'; render();" style="${selectedVoteId===p.id?'border-color:red;':''}">${p.name}</div>`).join('')}
+          ${roomData.players.map(p => `<div class="vote-card ${selectedVoteId===p.id?'selected':''}" onclick="selectedVoteId='${p.id}'; render();">${p.name}</div>`).join('')}
         </div>
-        <button class="btn btn-danger stack" onclick="alert('ผู้เล่นถูกคัดออก! (รอระบบสรุปผลอัปเดตตามมาครับ)')">ยืนยันคัดออก</button>
-      ` : `
-        <p class="dim">หมดเวลาสนทนา! รอคุณครูสรุปผลการโหวตหน้ารวม...</p>
-      `}
-    </div>`;
+        <div class="vote-card ${selectedVoteId==='skip'?'selected':''}" onclick="selectedVoteId='skip'; render();" style="margin-bottom:14px;">🙅‍♂️ ไม่คัดใครออก (ข้ามโหวต)</div>
+        <button class="btn btn-primary stack" onclick="submitPlayerVote()">ยืนยันการโหวต</button>`;
+      }
+    }
+    html += `</div>`;
   }
 
   app.innerHTML = html;
