@@ -81,6 +81,7 @@
 <div id="app" class="app-shell"></div>
 
 <script>
+// เชื่อมต่อกับเซิร์ฟเวอร์ Render
 const SERVER_URL = 'https://oilspy-game-server.onrender.com';
 const socket = io(SERVER_URL);
 
@@ -107,7 +108,11 @@ let selectedVoteId = null;
 let hasVoted = false;
 let voteTally = {}; 
 
-socket.on('connect', () => console.log('Connected to Server!'));
+socket.on('connect', () => {
+  console.log('Connected to Server!');
+  // ถ้าเชื่อมต่อสำเร็จ ให้เปิดปุ่มที่อาจจะถูกล็อกไว้ตอนกำลังโหลด
+  render();
+});
 
 socket.on('updatePlayers', (players) => {
   if (roomData) {
@@ -145,7 +150,6 @@ socket.on('phaseChanged', (phase) => {
   
   if (phase === 'discuss') {
     timerRemaining = roomData.settings.timerSeconds || 180;
-    // ⚙️ ระบบออโต้โหมดเล่นกับเพื่อน: เริ่มจับเวลาทันทีที่เข้าหน้าคุย
     if (isHost && roomData.isHostPlaying) startTimer();
   }
   
@@ -153,7 +157,7 @@ socket.on('phaseChanged', (phase) => {
     selectedVoteId = null;
     hasVoted = false;
     voteTally = {};
-    timerRemaining = 30; // ⏳ เวลาโหวต 30 วิ (แก้ตรงนี้ได้ถ้าอยากได้เวลาเพิ่ม)
+    timerRemaining = 30; // ⏳ เวลาโหวต 30 วิ
     if (isHost) startTimer();
   }
   render();
@@ -164,7 +168,6 @@ socket.on('timerSync', (timeLeft) => {
   const el = document.getElementById('timerText');
   if (el) el.textContent = fmtTime(timerRemaining);
   
-  // ผู้เล่นธรรมดา: บังคับโหวตตอนเวลาหมด
   if (!isHost && screen === 'vote' && timeLeft <= 0 && !hasVoted) {
     selectedVoteId = 'skip';
     submitPlayerVote();
@@ -202,10 +205,18 @@ socket.on('roomClosed', (msg) => {
   location.reload();
 });
 
-
 /* === Actions === */
-function createRoom(isHostPlaying) {
-  myName = document.getElementById('hostNameInput').value.trim() || (isHostPlaying ? 'ผู้เล่น 1' : 'ครูคุมห้อง');
+function createRoom(isHostPlaying, btnElement) {
+  // แก้ไขดึงค่าจาก input ที่มีอยู่จริง หรือใช้ค่าเริ่มต้น
+  const nameInput = document.getElementById('hostNameInput');
+  myName = (nameInput ? nameInput.value.trim() : '') || (isHostPlaying ? 'ผู้เล่น 1' : 'ครูคุมห้อง');
+  
+  // โชว์ข้อความโหลดให้รู้ว่ากำลังต่อเซิร์ฟเวอร์
+  if (btnElement) {
+    btnElement.innerHTML = '⏳ กำลังเชื่อมต่อ...';
+    btnElement.disabled = true;
+  }
+
   socket.emit('createRoom', { isHostPlaying, playerName: myName }, (res) => {
     if (res.success) {
       isHost = true;
@@ -219,10 +230,15 @@ function createRoom(isHostPlaying) {
   });
 }
 
-function joinRoom() {
+function joinRoom(btnElement) {
   myName = document.getElementById('playerNameInput').value.trim();
   const code = document.getElementById('roomCodeInput').value.trim().toUpperCase();
   if (!myName || !code) return alert('กรอกชื่อและรหัสห้องให้ครบ');
+  
+  if (btnElement) {
+    btnElement.innerHTML = '⏳ กำลังเข้าห้อง...';
+    btnElement.disabled = true;
+  }
   
   socket.emit('joinRoom', { roomCode: code, playerName: myName }, (res) => {
     if (res.success) {
@@ -231,7 +247,13 @@ function joinRoom() {
       roomData.roomCode = code;
       screen = 'lobby';
       render();
-    } else { alert(res.message); }
+    } else { 
+      alert(res.message); 
+      if (btnElement) {
+        btnElement.innerHTML = 'เข้าสู่ห้อง';
+        btnElement.disabled = false;
+      }
+    }
   });
 }
 
@@ -271,7 +293,6 @@ function startGameHost() {
 }
 
 function confirmReveal() {
-  // เมื่อดูโรลเสร็จ Host จะทำหน้าที่สั่งย้ายเฟสให้ทุกคน (ซึ่งจะกระตุ้นการเริ่มเวลาอัตโนมัติด้วย)
   if (isHost && roomData.isHostPlaying) {
      socket.emit('changePhase', { roomCode: roomData.roomCode, phase: 'discuss' });
   } else {
@@ -288,22 +309,19 @@ function startTimer() {
     if(el) el.textContent = fmtTime(timerRemaining);
     socket.emit('updateTimer', { roomCode: roomData.roomCode, timeLeft: timerRemaining });
     
-    // ⏰ เมื่อเวลาหมด (ประมวลผลฝั่ง Host)
     if(timerRemaining <= 0) {
       stopTimer();
       
-      // หมดเวลาคุย
       if(screen === 'discuss') {
          if(roomData.isHostPlaying) {
-            goToVote(); // บังคับไปโหวตอัตโนมัติ (โหมดเพื่อนเล่นกันเอง)
+            goToVote(); 
          } else {
             alert('⏳ หมดเวลาสนทนา! คุณครูโปรดกดปุ่ม เปิดระบบโหวต');
          }
       }
-      // หมดเวลาโหวต
       else if (screen === 'vote') {
          if (roomData.isHostPlaying) {
-             processVotingResult(); // บังคับสรุปผลโหวตอัตโนมัติ (โหมดเพื่อนเล่นกันเอง)
+             processVotingResult(); 
          } else {
              const totalVotes = Object.keys(voteTally).length;
              const half = roomData.active.length / 2;
@@ -312,7 +330,7 @@ function startTimer() {
                  selectedVoteId = 'skip';
                  concludeVoteHost();
              } else {
-                 alert('⏳ หมดเวลาโหวต! (โปรดครูตรวจสอบคะแนนแล้วกดฟันธง)');
+                 alert('⏳ หมดเวลาโหวต! (โปรดตรวจสอบคะแนนแล้วกดฟันธง)');
              }
          }
       }
@@ -341,7 +359,6 @@ function submitHostVote(id) {
   render();
 }
 
-// สรุปผลโหวตแบบครูกดเอง (ฟันธง)
 function concludeVoteHost() {
   if(!selectedVoteId) return alert('กรุณาเลือกผู้เล่น หรือกด ไม่คัดใครออก');
   stopTimer();
@@ -355,7 +372,6 @@ function concludeVoteHost() {
   }
 }
 
-// สรุปผลโหวตแบบอัตโนมัติ 100% (นับคะแนนเองเมื่อหมดเวลา)
 function processVotingResult() {
   if(!isHost) return;
   stopTimer();
@@ -378,7 +394,6 @@ function processVotingResult() {
   }
 }
 
-// ลอจิกการคัดออกและตัดสินผลแพ้ชนะ
 function executeElimination(targetId) {
   const targetName = roomData.players.find(p=>p.id===targetId)?.name || 'ผู้เล่น';
   const targetRole = roomData.roles[targetId];
@@ -427,20 +442,17 @@ function render() {
   
   if (screen === 'home') {
     html += `<div class="card center">
-      <h2>ตั้งห้องเล่นกับเพื่อน</h2>
+      <h2>ตั้งห้อง / ผู้ควบคุม</h2>
+      <input id="hostNameInput" class="input" placeholder="ชื่อของคุณ (คนสร้างห้อง)...">
       <div class="stack">
-        <button class="btn btn-primary" onclick="createRoom(true)">🕹️ สร้างห้อง (คุณเป็นผู้เล่นด้วย)</button>
+        <button class="btn btn-primary" onclick="createRoom(true, this)">🕹️ สร้างห้อง (คุณเป็นผู้เล่นด้วย)</button>
+        <button class="btn btn-secondary" onclick="createRoom(false, this)">👑 สร้างห้อง (คุมอย่างเดียว ไม่เล่น)</button>
       </div>
       <div class="divider"></div>
-      <h2>ผู้ควบคุมเกม (ครู)</h2>
-      <div class="stack">
-        <button class="btn btn-secondary" onclick="createRoom(false)">👑 สร้างห้อง (คุมอย่างเดียว ไม่เล่น)</button>
-      </div>
-      <div class="divider"></div>
-      <h2>เข้าสู่ห้อง</h2>
+      <h2>เข้าสู่ห้อง (นักเรียน)</h2>
       <input id="playerNameInput" class="input" placeholder="ชื่อผู้เล่น...">
       <input id="roomCodeInput" class="input" placeholder="รหัสห้อง 4 หลัก..." style="text-transform:uppercase;">
-      <button class="btn btn-primary" onclick="joinRoom()">เข้าสู่ห้อง</button>
+      <button class="btn btn-primary" onclick="joinRoom(this)">เข้าสู่ห้อง</button>
     </div>`;
   }
   
@@ -519,7 +531,6 @@ function render() {
     
     const activePlayers = roomData.players.filter(p => roomData.active.includes(p.id));
 
-    // จอ Host (ครูคุม หรือ Hostที่เล่นด้วย)
     if (isHost) {
       const totalVotes = Object.keys(voteTally).length;
       html += `<p class="dim">คะแนนโหวตสด (${totalVotes}/${roomData.active.length} คน)</p>
@@ -540,7 +551,6 @@ function render() {
          <button class="btn btn-danger stack" onclick="concludeVoteHost()">ฟันธงผลโหวต</button>`;
       }
     } 
-    // จอผู้เล่นทั่วไป
     else {
       if (myRole === 'ถูกคัดออก') {
          html += `<p class="dim" style="margin-top:20px; color:var(--red);">💀 คุณถูกคัดออกไปแล้ว (ดูเพื่อนๆ โหวตกันต่อ)</p>`;
