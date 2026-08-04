@@ -132,7 +132,6 @@ socket.on('gameStarted', (data) => {
   myWord = data.word;
   myCategory = data.category;
   
-  // ✅ แก้บั๊กหน้าจอค้าง: ซิงค์รายชื่อคนมีชีวิตให้ผู้เล่นทุกคนรับรู้ตรงกัน
   if (roomData) {
     roomData.active = roomData.players.map(p => p.id);
     roomData.eliminated = [];
@@ -190,14 +189,13 @@ socket.on('playerActionReceived', ({ playerId, action, data }) => {
 });
 
 socket.on('gameUpdated', (data) => {
+  if(!data) return; // ✅ ป้องกันบราวเซอร์แครชถ้าไม่มีข้อมูลส่งมา
+  
   if(data.action === 'eliminated') {
     alert(`🚨 สรุปโหวต: ${data.targetName} ถูกคัดออก! (เกมยังดำเนินต่อ)`);
-    
-    // ✅ นำคนที่ตายออกจากระบบของทุกคน เพื่อไม่ให้โผล่ในหน้าโหวตรอบหน้า
     if (roomData && roomData.active) {
       roomData.active = roomData.active.filter(id => id !== data.targetId);
     }
-    
     if(data.targetId === socket.id) { myRole = 'ถูกคัดออก'; } 
   }
   else if(data.action === 'gameOver') {
@@ -336,7 +334,7 @@ function startTimer() {
              const totalVotes = Object.keys(voteTally).length;
              const half = roomData.active.length / 2;
              if (totalVotes <= half) {
-                 alert('⏳ หมดเวลา! มีคนโหวตไม่ถึงครึ่ง ระบบบังคับไม่คัดใครออก');
+                 alert('⏳ หมดเวลา! มีนักเรียนโหวตไม่ถึงครึ่ง ระบบบังคับไม่คัดใครออก');
                  selectedVoteId = 'skip';
                  concludeVoteHost();
              } else {
@@ -386,7 +384,6 @@ function processVotingResult() {
   if(!isHost) return;
   stopTimer();
 
-  // ✅ ระบบบังคับโหวต 'skip' ให้อัตโนมัติ สำหรับคนที่ลืมโหวตตอนหมดเวลา
   if (roomData && roomData.active) {
     roomData.active.forEach(pid => {
       if (!voteTally[pid]) voteTally[pid] = 'skip';
@@ -433,14 +430,21 @@ function executeElimination(targetId) {
     winner = 'spy'; winnerReason = `จำนวนชาวบ้านเหลือน้อยกว่าหรือเท่ากับสปาย สปายชนะทันที!`;
   }
 
+  // ✅ แก้บั๊กหลัก: ใส่ `updateData` ครอบข้อมูลตอนส่งให้ Server
   if (winner) {
     socket.emit('hostUpdateGame', {
-      roomCode: roomData.roomCode, action: 'gameOver',
-      winner, winnerReason, roles: roomData.roles, eliminated: roomData.eliminated, word: myWord, category: myCategory
+      roomCode: roomData.roomCode,
+      updateData: {
+        action: 'gameOver',
+        winner, winnerReason, roles: roomData.roles, eliminated: roomData.eliminated, word: myWord, category: myCategory
+      }
     });
   } else {
     roomData.round++;
-    socket.emit('hostUpdateGame', { roomCode: roomData.roomCode, action: 'eliminated', targetId, targetName });
+    socket.emit('hostUpdateGame', { 
+      roomCode: roomData.roomCode, 
+      updateData: { action: 'eliminated', targetId, targetName } 
+    });
     socket.emit('changePhase', { roomCode: roomData.roomCode, phase: 'discuss' });
   }
 }
@@ -549,7 +553,6 @@ function render() {
     html += `<div class="card center"><h2>🗳 โหวตคัดออก (รอบ ${roomData.round || 1})</h2>
     <div class="timer-display" id="timerText" style="font-size: 42px; margin-top: -5px; margin-bottom: 10px;">${fmtTime(timerRemaining)}</div>`;
     
-    // ✅ แก้บั๊กหน้าโหวต: ดึงเฉพาะคนที่มีชีวิตมาแสดง
     const activePlayers = roomData.players.filter(p => (roomData.active || roomData.players.map(x=>x.id)).includes(p.id));
 
     if (isHost) {
