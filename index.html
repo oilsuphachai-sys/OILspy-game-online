@@ -81,7 +81,6 @@
 <div id="app" class="app-shell"></div>
 
 <script>
-// เชื่อมต่อกับเซิร์ฟเวอร์ Render
 const SERVER_URL = 'https://oilspy-game-server.onrender.com';
 const socket = io(SERVER_URL);
 
@@ -189,7 +188,7 @@ socket.on('playerActionReceived', ({ playerId, action, data }) => {
 });
 
 socket.on('gameUpdated', (data) => {
-  if(!data) return; // ✅ ป้องกันบราวเซอร์แครชถ้าไม่มีข้อมูลส่งมา
+  if(!data) return;
   
   if(data.action === 'eliminated') {
     alert(`🚨 สรุปโหวต: ${data.targetName} ถูกคัดออก! (เกมยังดำเนินต่อ)`);
@@ -221,7 +220,7 @@ function createRoom(isHostPlaying, btnElement) {
   myName = (nameInput ? nameInput.value.trim() : '') || (isHostPlaying ? 'ผู้เล่น 1' : 'ครูคุมห้อง');
   
   if (btnElement) {
-    btnElement.innerHTML = '⏳ กำลังเชื่อมต่อ...';
+    btnElement.innerHTML = '⏳ กำลังสร้างห้อง...';
     btnElement.disabled = true;
   }
 
@@ -234,6 +233,12 @@ function createRoom(isHostPlaying, btnElement) {
       roomData.round = 1;
       screen = 'lobby';
       render();
+    } else {
+      alert(res.message || 'สร้างห้องไม่สำเร็จ');
+      if (btnElement) {
+        btnElement.innerHTML = isHostPlaying ? '🕹️ สร้างห้อง (คุณเป็นผู้เล่นด้วย)' : '👑 สร้างห้อง (คุมอย่างเดียว ไม่เล่น)';
+        btnElement.disabled = false;
+      }
     }
   });
 }
@@ -430,7 +435,6 @@ function executeElimination(targetId) {
     winner = 'spy'; winnerReason = `จำนวนชาวบ้านเหลือน้อยกว่าหรือเท่ากับสปาย สปายชนะทันที!`;
   }
 
-  // ✅ แก้บั๊กหลัก: ใส่ `updateData` ครอบข้อมูลตอนส่งให้ Server
   if (winner) {
     socket.emit('hostUpdateGame', {
       roomCode: roomData.roomCode,
@@ -463,17 +467,14 @@ function render() {
   
   if (screen === 'home') {
     html += `<div class="card center">
-      <h2>ตั้งห้องเล่นกับเพื่อน</h2>
+      <h2>สร้างห้อง / ผู้ควบคุม</h2>
+      <input id="hostNameInput" class="input" placeholder="ชื่อของคุณ (ผู้สร้างห้อง)...">
       <div class="stack">
         <button class="btn btn-primary" onclick="createRoom(true, this)">🕹️ สร้างห้อง (คุณเป็นผู้เล่นด้วย)</button>
-      </div>
-      <div class="divider"></div>
-      <h2>ผู้ควบคุมเกม (ครู)</h2>
-      <div class="stack">
         <button class="btn btn-secondary" onclick="createRoom(false, this)">👑 สร้างห้อง (คุมอย่างเดียว ไม่เล่น)</button>
       </div>
       <div class="divider"></div>
-      <h2>เข้าสู่ห้อง</h2>
+      <h2>เข้าร่วมห้อง (ผู้เล่น)</h2>
       <input id="playerNameInput" class="input" placeholder="ชื่อผู้เล่น...">
       <input id="roomCodeInput" class="input" placeholder="รหัสห้อง 4 หลัก..." style="text-transform:uppercase;">
       <button class="btn btn-primary" onclick="joinRoom(this)">เข้าสู่ห้อง</button>
