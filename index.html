@@ -105,14 +105,14 @@ let timerInterval = null;
 // Vote State
 let selectedVoteId = null;
 let hasVoted = false;
-let voteTally = {}; // { voterId: targetId }
+let voteTally = {}; 
 
 socket.on('connect', () => console.log('Connected to Server!'));
 
 socket.on('updatePlayers', (players) => {
   if (roomData) {
     roomData.players = players;
-    if (isHost && !roomData.active) roomData.active = players.map(p=>p.id); // ตั้งค่า active เริ่มต้น
+    if (isHost && !roomData.active) roomData.active = players.map(p=>p.id);
   }
   if (screen === 'lobby') render();
 });
@@ -142,10 +142,19 @@ socket.on('hostGameStarted', (data) => {
 socket.on('phaseChanged', (phase) => {
   if (roomData) roomData.state = phase;
   screen = phase;
+  
+  if (phase === 'discuss') {
+    timerRemaining = roomData.settings.timerSeconds || 180;
+    // ⚙️ ระบบออโต้โหมดเล่นกับเพื่อน: เริ่มจับเวลาทันทีที่เข้าหน้าคุย
+    if (isHost && roomData.isHostPlaying) startTimer();
+  }
+  
   if (phase === 'vote') {
     selectedVoteId = null;
     hasVoted = false;
     voteTally = {};
+    timerRemaining = 30; // ⏳ เวลาโหวต 30 วิ (แก้ตรงนี้ได้ถ้าอยากได้เวลาเพิ่ม)
+    if (isHost) startTimer();
   }
   render();
 });
@@ -155,15 +164,10 @@ socket.on('timerSync', (timeLeft) => {
   const el = document.getElementById('timerText');
   if (el) el.textContent = fmtTime(timerRemaining);
   
-  // ระบบบังคับโหวตของนักเรียนเมื่อหมดเวลา
+  // ผู้เล่นธรรมดา: บังคับโหวตตอนเวลาหมด
   if (!isHost && screen === 'vote' && timeLeft <= 0 && !hasVoted) {
     selectedVoteId = 'skip';
     submitPlayerVote();
-  }
-  
-  // ระบบประมวลผลอัตโนมัติฝั่งครู
-  if (isHost && screen === 'vote' && timeLeft <= 0) {
-    processVotingResult();
   }
 });
 
@@ -176,11 +180,10 @@ socket.on('playerActionReceived', ({ playerId, action, data }) => {
   }
 });
 
-// รับคำสั่งสรุปผลเกมจาก Host
 socket.on('gameUpdated', (data) => {
   if(data.action === 'eliminated') {
     alert(`🚨 สรุปโหวต: ${data.targetName} ถูกคัดออก! (เกมยังดำเนินต่อ)`);
-    if(data.targetId === socket.id) { myRole = 'ถูกคัดออก'; } // อัปเดตสถานะคนตาย
+    if(data.targetId === socket.id) { myRole = 'ถูกคัดออก'; } 
   }
   else if(data.action === 'gameOver') {
     roomData.winner = data.winner;
@@ -202,7 +205,7 @@ socket.on('roomClosed', (msg) => {
 
 /* === Actions === */
 function createRoom(isHostPlaying) {
-  myName = document.getElementById('hostNameInput').value.trim() || (isHostPlaying ? 'ครู' : 'Host');
+  myName = document.getElementById('hostNameInput').value.trim() || (isHostPlaying ? 'ผู้เล่น 1' : 'ครูคุมห้อง');
   socket.emit('createRoom', { isHostPlaying, playerName: myName }, (res) => {
     if (res.success) {
       isHost = true;
@@ -235,6 +238,7 @@ function joinRoom() {
 function updateSettings(key, val) {
   if(!isHost) return;
   if(key === 'spyCount') roomData.settings.spyCount = Math.max(1, roomData.settings.spyCount + val);
+  else if(key === 'timerSeconds') roomData.settings.timerSeconds = Math.max(30, roomData.settings.timerSeconds + val);
   else roomData.settings[key] = !roomData.settings[key];
   socket.emit('updateLobbySettings', { roomCode: roomData.roomCode, settings: roomData.settings });
   render();
@@ -252,7 +256,7 @@ function startGameHost() {
   const word = CATEGORIES[cat][Math.floor(Math.random() * CATEGORIES[cat].length)];
   
   const roles = {};
-  roomData.active = roomData.players.map(p=>p.id); // บันทึกคนที่มีชีวิต
+  roomData.active = roomData.players.map(p=>p.id); 
   const shuffledIds = [...roomData.active].sort(()=>Math.random()-0.5);
   
   let i = 0;
@@ -262,9 +266,18 @@ function startGameHost() {
   if(s.includeSeer) { roles[shuffledIds[i]] = 'seer'; i++; }
   for(; i<shuffledIds.length; i++) { roles[shuffledIds[i]] = 'villager'; }
   
-  roomData.roles = roles; // Host เก็บ roles ไว้ตรวจคำตอบ
-  
+  roomData.roles = roles; 
   socket.emit('startGame', { roomCode: roomData.roomCode, roles, word, category: cat });
+}
+
+function confirmReveal() {
+  // เมื่อดูโรลเสร็จ Host จะทำหน้าที่สั่งย้ายเฟสให้ทุกคน (ซึ่งจะกระตุ้นการเริ่มเวลาอัตโนมัติด้วย)
+  if (isHost && roomData.isHostPlaying) {
+     socket.emit('changePhase', { roomCode: roomData.roomCode, phase: 'discuss' });
+  } else {
+     screen = 'discuss';
+     render();
+  }
 }
 
 function startTimer() {
@@ -275,9 +288,34 @@ function startTimer() {
     if(el) el.textContent = fmtTime(timerRemaining);
     socket.emit('updateTimer', { roomCode: roomData.roomCode, timeLeft: timerRemaining });
     
-    // ครู: ถ้าหมดเวลาและไม่ใช่หน้าโหวตให้หยุดเวลาเฉยๆ (แต่ถ้าหน้าโหวตระบบจะรันเองใน timerSync)
+    // ⏰ เมื่อเวลาหมด (ประมวลผลฝั่ง Host)
     if(timerRemaining <= 0) {
       stopTimer();
+      
+      // หมดเวลาคุย
+      if(screen === 'discuss') {
+         if(roomData.isHostPlaying) {
+            goToVote(); // บังคับไปโหวตอัตโนมัติ (โหมดเพื่อนเล่นกันเอง)
+         } else {
+            alert('⏳ หมดเวลาสนทนา! คุณครูโปรดกดปุ่ม เปิดระบบโหวต');
+         }
+      }
+      // หมดเวลาโหวต
+      else if (screen === 'vote') {
+         if (roomData.isHostPlaying) {
+             processVotingResult(); // บังคับสรุปผลโหวตอัตโนมัติ (โหมดเพื่อนเล่นกันเอง)
+         } else {
+             const totalVotes = Object.keys(voteTally).length;
+             const half = roomData.active.length / 2;
+             if (totalVotes <= half) {
+                 alert('⏳ หมดเวลา! มีนักเรียนโหวตไม่ถึงครึ่ง ระบบบังคับไม่คัดใครออก');
+                 selectedVoteId = 'skip';
+                 concludeVoteHost();
+             } else {
+                 alert('⏳ หมดเวลาโหวต! (โปรดครูตรวจสอบคะแนนแล้วกดฟันธง)');
+             }
+         }
+      }
     }
   }, 1000);
 }
@@ -286,9 +324,7 @@ function stopTimer() { clearInterval(timerInterval); timerInterval = null; }
 
 function goToVote() {
   stopTimer();
-  timerRemaining = 30; // ⏳ เวลาโหวต 30 วินาที
   socket.emit('changePhase', { roomCode: roomData.roomCode, phase: 'vote' });
-  startTimer(); 
 }
 
 function submitPlayerVote() {
@@ -305,56 +341,58 @@ function submitHostVote(id) {
   render();
 }
 
-// 🧠 ระบบสรุปผลโหวตอัจฉริยะ (รันอัตโนมัติเมื่อหมดเวลา หรือ ครูกดบังคับจบ)
+// สรุปผลโหวตแบบครูกดเอง (ฟันธง)
+function concludeVoteHost() {
+  if(!selectedVoteId) return alert('กรุณาเลือกผู้เล่น หรือกด ไม่คัดใครออก');
+  stopTimer();
+  
+  if(selectedVoteId === 'skip') {
+    alert('ผลสรุป: ไม่คัดใครออก');
+    roomData.round++;
+    socket.emit('changePhase', { roomCode: roomData.roomCode, phase: 'discuss' });
+  } else {
+    executeElimination(selectedVoteId);
+  }
+}
+
+// สรุปผลโหวตแบบอัตโนมัติ 100% (นับคะแนนเองเมื่อหมดเวลา)
 function processVotingResult() {
   if(!isHost) return;
   stopTimer();
 
-  // นับคะแนนโหวต
   const counts = {};
   Object.values(voteTally).forEach(v => counts[v] = (counts[v] || 0) + 1);
 
-  let highestTarget = null;
-  let highestCount = 0;
-  let isTie = false;
-
+  let highestTarget = null, highestCount = 0, isTie = false;
   for (const [target, count] of Object.entries(counts)) {
-    if (count > highestCount) {
-      highestCount = count;
-      highestTarget = target;
-      isTie = false;
-    } else if (count === highestCount) {
-      isTie = true; // มีคะแนนเท่ากัน
-    }
+    if (count > highestCount) { highestCount = count; highestTarget = target; isTie = false; } 
+    else if (count === highestCount) { isTie = true; }
   }
 
-  // กรณีไม่มีคนโหวต, เสมอ, หรือ เสียงข้างมากเลือก "ไม่คัดใครออก (skip)"
   if (highestCount === 0 || isTie || highestTarget === 'skip') {
-    alert('⚖️ ผลโหวตเสมอ หรือ เสียงส่วนใหญ่ไม่คัดใครออก!\n(จะไม่มีใครถูกคัดออกในรอบนี้)');
+    alert('⚖️ ผลโหวตเสมอ หรือ เสียงส่วนใหญ่ไม่คัดใครออก!\n(ไปลุยกันต่อรอบหน้า)');
     roomData.round++;
     socket.emit('changePhase', { roomCode: roomData.roomCode, phase: 'discuss' });
-    return;
+  } else {
+    executeElimination(highestTarget);
   }
+}
 
-  // ทำการคัดออกผู้ที่ได้คะแนนสูงสุด
-  const targetId = highestTarget;
+// ลอจิกการคัดออกและตัดสินผลแพ้ชนะ
+function executeElimination(targetId) {
   const targetName = roomData.players.find(p=>p.id===targetId)?.name || 'ผู้เล่น';
   const targetRole = roomData.roles[targetId];
 
-  // นำออกจาก active
   roomData.active = roomData.active.filter(id => id !== targetId);
   roomData.eliminated.push({ id: targetId, name: targetName, role: targetRole });
 
-  // เช็คเงื่อนไขชนะ
   let activeSpies = 0, activeVillagers = 0;
   roomData.active.forEach(id => {
     if (roomData.roles[id] === 'spy') activeSpies++;
     else activeVillagers++;
   });
 
-  let winner = null;
-  let winnerReason = '';
-
+  let winner = null, winnerReason = '';
   if (targetRole === 'joker') {
     winner = 'joker'; winnerReason = `${targetName} (โจ๊กเกอร์) ถูกโหวตออก โจ๊กเกอร์ชนะทันที!`;
   } else if (activeSpies === 0) {
@@ -364,13 +402,11 @@ function processVotingResult() {
   }
 
   if (winner) {
-    // จบเกม ส่งข้อมูลให้ทุกคนไปหน้า Result
     socket.emit('hostUpdateGame', {
       roomCode: roomData.roomCode, action: 'gameOver',
       winner, winnerReason, roles: roomData.roles, eliminated: roomData.eliminated, word: myWord, category: myCategory
     });
   } else {
-    // ไปต่อรอบถัดไป
     roomData.round++;
     socket.emit('hostUpdateGame', { roomCode: roomData.roomCode, action: 'eliminated', targetId, targetName });
     socket.emit('changePhase', { roomCode: roomData.roomCode, phase: 'discuss' });
@@ -391,14 +427,17 @@ function render() {
   
   if (screen === 'home') {
     html += `<div class="card center">
-      <h2>ผู้ควบคุมเกม (ครู)</h2>
-      <input id="hostNameInput" class="input" placeholder="ชื่อของคุณ...">
+      <h2>ตั้งห้องเล่นกับเพื่อน</h2>
       <div class="stack">
-        <button class="btn btn-primary" onclick="createRoom(false)">👑 สร้างห้อง (คุมอย่างเดียว)</button>
-        <button class="btn btn-secondary" onclick="createRoom(true)">🙋‍♂️ สร้างห้อง (และเล่นด้วย)</button>
+        <button class="btn btn-primary" onclick="createRoom(true)">🕹️ สร้างห้อง (คุณเป็นผู้เล่นด้วย)</button>
       </div>
       <div class="divider"></div>
-      <h2>ผู้เล่น (นักเรียน)</h2>
+      <h2>ผู้ควบคุมเกม (ครู)</h2>
+      <div class="stack">
+        <button class="btn btn-secondary" onclick="createRoom(false)">👑 สร้างห้อง (คุมอย่างเดียว ไม่เล่น)</button>
+      </div>
+      <div class="divider"></div>
+      <h2>เข้าสู่ห้อง</h2>
       <input id="playerNameInput" class="input" placeholder="ชื่อผู้เล่น...">
       <input id="roomCodeInput" class="input" placeholder="รหัสห้อง 4 หลัก..." style="text-transform:uppercase;">
       <button class="btn btn-primary" onclick="joinRoom()">เข้าสู่ห้อง</button>
@@ -419,6 +458,14 @@ function render() {
     </div>
     <div class="card">
       <h3>ตั้งค่าเกม ${isHost ? '' : '(Host เป็นคนตั้งค่า)'}</h3>
+      <div class="stepper-row">
+        <div><b>เวลาพูดคุย (วินาที)</b></div>
+        <div class="stepper">
+          ${isHost ? `<button onclick="updateSettings('timerSeconds', -30)">-</button>` : ''}
+          <div class="val">${roomData.settings.timerSeconds || 180}</div>
+          ${isHost ? `<button onclick="updateSettings('timerSeconds', 30)">+</button>` : ''}
+        </div>
+      </div>
       <div class="stepper-row">
         <div><b>จำนวนสปาย</b></div>
         <div class="stepper">
@@ -442,20 +489,26 @@ function render() {
       <div class="word-big">${myRole === 'spy' ? '?????' : myWord}</div>
       <p class="dim">${myRole === 'spy' ? 'พยายามเดาคำลับจากเพื่อน และเนียนไปกับพวกเขา!' : 'คุยกับเพื่อนให้รู้เรื่อง แต่อย่าให้สปายจับคำลับได้'}</p>
     </div>
-    <button class="btn btn-primary stack" onclick="screen='discuss'; render();">✅ ดูเสร็จแล้ว เข้าสู่ช่วงสนทนา</button>`;
+    <button class="btn btn-primary stack" onclick="confirmReveal()">✅ ดูเสร็จแล้ว เข้าสู่ช่วงสนทนา</button>`;
   }
   
   else if (screen === 'discuss') {
     html += `<div class="card center">
       <div class="eyebrow">รอบที่ ${roomData.round || 1} · ช่วงสนทนา</div>
       <div class="timer-display" id="timerText">${fmtTime(timerRemaining)}</div>`;
+      
       if (!isHost || roomData.isHostPlaying) {
         html += `<div class="divider"></div><p class="dim" style="font-size:15px;">คุณคือ <b>${ROLE_NAMES[myRole]}</b> | คำลับ: <b style="color:var(--gold);">${myRole === 'spy' ? '?????' : myWord}</b></p>`;
       }
+      
       if (isHost) {
-        html += `<div class="divider"></div><p class="eyebrow">แผงควบคุมของครู</p>
-        <div class="btn-row"><button class="btn btn-secondary" onclick="startTimer()">▶️ เล่นเวลา</button><button class="btn btn-secondary" onclick="stopTimer()">⏸ หยุดเวลา</button></div>
-        <div class="stack"><button class="btn btn-danger" onclick="goToVote()">🗳 เปิดระบบโหวต 30 วิ</button></div>`;
+        if (roomData.isHostPlaying) {
+          html += `<div class="divider"></div><button class="btn btn-ghost stack" onclick="goToVote()">⏭️ คุยเสร็จแล้ว ข้ามไปโหวตทันที</button>`;
+        } else {
+          html += `<div class="divider"></div><p class="eyebrow">แผงควบคุมของครู</p>
+          <div class="btn-row"><button class="btn btn-secondary" onclick="startTimer()">▶️ เล่นเวลา</button><button class="btn btn-secondary" onclick="stopTimer()">⏸ หยุดเวลา</button></div>
+          <div class="stack"><button class="btn btn-danger" onclick="goToVote()">🗳 เปิดระบบโหวต</button></div>`;
+        }
       }
     html += `</div>`;
   }
@@ -464,10 +517,9 @@ function render() {
     html += `<div class="card center"><h2>🗳 โหวตคัดออก (รอบ ${roomData.round || 1})</h2>
     <div class="timer-display" id="timerText" style="font-size: 42px; margin-top: -5px; margin-bottom: 10px;">${fmtTime(timerRemaining)}</div>`;
     
-    // ดึงเฉพาะคนที่ยังมีชีวิตอยู่มาให้โหวต
     const activePlayers = roomData.players.filter(p => roomData.active.includes(p.id));
 
-    // โหมดหน้าจอครู (Host)
+    // จอ Host (ครูคุม หรือ Hostที่เล่นด้วย)
     if (isHost) {
       const totalVotes = Object.keys(voteTally).length;
       html += `<p class="dim">คะแนนโหวตสด (${totalVotes}/${roomData.active.length} คน)</p>
@@ -478,20 +530,25 @@ function render() {
           return `<div class="vote-card" onclick="${roomData.isHostPlaying && !hasVoted ? `submitHostVote('${p.id}')` : ''}">${p.name}${badge}</div>`;
         }).join('')}
       </div>
-      <div class="vote-card" onclick="${roomData.isHostPlaying && !hasVoted ? `submitHostVote('skip')` : ''}" style="margin-bottom:14px;">🙅‍♂️ ไม่คัดใครออก ${Object.values(voteTally).filter(v => v === 'skip').length > 0 ? `<span class="vote-badge" style="right:10px;">${Object.values(voteTally).filter(v => v === 'skip').length}</span>` : ''}</div>
-      <p class="dim" style="font-size:12px;">(ระบบจะประมวลผลอัตโนมัติเมื่อหมดเวลา)</p>
-      <button class="btn btn-danger stack" onclick="processVotingResult()">สรุปผลโหวตทันที (ไม่รอเวลา)</button>`;
+      <div class="vote-card" onclick="${roomData.isHostPlaying && !hasVoted ? `submitHostVote('skip')` : ''}" style="margin-bottom:14px;">🙅‍♂️ ไม่คัดใครออก ${Object.values(voteTally).filter(v => v === 'skip').length > 0 ? `<span class="vote-badge" style="right:10px;">${Object.values(voteTally).filter(v => v === 'skip').length}</span>` : ''}</div>`;
+      
+      if (roomData.isHostPlaying) {
+         html += `<p class="dim" style="font-size:12px; margin-top:10px;">(รอระบบสรุปผลอัตโนมัติเมื่อหมดเวลา)</p>
+         <button class="btn btn-ghost stack" onclick="processVotingResult()">สรุปผลโหวตทันที (ไม่รอเวลา)</button>`;
+      } else {
+         html += `<p class="dim" style="font-size:12px; margin-top:10px;">ครูสามารถคลิกเลือกตามเสียงส่วนมาก แล้วกดฟันธงด้านล่าง</p>
+         <button class="btn btn-danger stack" onclick="concludeVoteHost()">ฟันธงผลโหวต</button>`;
+      }
     } 
-    // โหมดหน้าจอนักเรียน (Player)
+    // จอผู้เล่นทั่วไป
     else {
-      // ถ้าตายไปแล้ว
       if (myRole === 'ถูกคัดออก') {
          html += `<p class="dim" style="margin-top:20px; color:var(--red);">💀 คุณถูกคัดออกไปแล้ว (ดูเพื่อนๆ โหวตกันต่อ)</p>`;
       }
       else if (hasVoted) {
         html += `<p class="dim" style="margin-top:20px;">✅ ส่งผลโหวตเรียบร้อย<br>รอประมวลผลเมื่อเวลาหมด...</p>`;
       } else {
-        html += `<p class="dim">เลือกผู้เล่นที่คิดว่าเป็นสปาย (ภายในเวลาที่กำหนด)</p>
+        html += `<p class="dim">เลือกผู้เล่นที่คิดว่าเป็นสปาย</p>
         <div class="vote-grid">
           ${activePlayers.map(p => `<div class="vote-card ${selectedVoteId===p.id?'selected':''}" onclick="selectedVoteId='${p.id}'; render();">${p.name}</div>`).join('')}
         </div>
@@ -502,7 +559,6 @@ function render() {
     html += `</div>`;
   }
   
-  // หน้าจอสรุปผลเกม (Result)
   else if (screen === 'result') {
     const bannerText = {villager:'🛡️ ชาวบ้านชนะ!', spy:'🕶️ สปายชนะ!', joker:'🎭 โจ๊กเกอร์ชนะ!'}[roomData.winner] || 'จบเกม!';
     const bannerColor = {villager:'var(--green)', spy:'var(--red)', joker:'var(--gold)'}[roomData.winner] || 'var(--gold)';
@@ -513,7 +569,6 @@ function render() {
       <div class="divider"></div>
       <p class="dim">คำลับคือ: <b style="color:var(--gold); font-size:18px;">${roomData.gameWord}</b> (${roomData.gameCategory})</p>
     </div>
-    
     <div class="card">
       <h3 style="margin-bottom: 12px;">สรุปบทบาท</h3>
       <div class="stack">
